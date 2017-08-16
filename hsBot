@@ -1,0 +1,448 @@
+package hs;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Random;
+
+import robocode.*;
+import static robocode.util.Utils.normalRelativeAngleDegrees;
+
+
+public class HsBot4 extends AdvancedRobot {
+	
+	static int trialNumber = 9;
+
+	/**ReInforcement Learning variables*/
+	static boolean offPolicy = true; // True for Q-Learning, false for SARSA
+	static double alpha = 0.2;
+	static double gamma = 0.8;
+	static double epsilon = 0.1;//probability of exploration 0 for no randomness
+	
+	static int numberOfStates = 7;
+	static int numberOfActions = 7;
+	
+	static double rewardForHitBullet = 0.8;
+	static double rewardForMissBullet = -0.5;
+	static double rewardForHitWall = -0.2;
+	static double rewardForHitRobot = 0.9;
+	static double rewardForHitByBullet = -0.9;
+	static double rewardForLoss = -1;
+	static double rewardForWin = 1;
+	
+	/**
+	 * //States:
+1. Enemy distance 3cases (low, med, high):// 0: 0-199, 1: 201-499, 2: 500-999
+2. Energy  3cases (low, med, high):// energy levels equal 0: 0-19, 1: 20-49, 2: 50-100
+3. enemy Energy 3cases (low, med, high): // energy levels equal 0: 0-19, 1: 20-49, 2: 50-100
+4. Bearing  4cases(quadrants) :// 0: Ahead, 1: Right, 2: Behind, 3: Left
+5. Enemy bearing /Heading 4cases(quadrants): // 0: Ahead, 1: Right, 2: Behind, 3: Left
+	 */
+	private static final int numberOfDistanceBins = 3;
+	private static final int numberOfBearningBins = 4;
+	private static final int numberOfEnergyBins = 3;
+	private static final int numberOfPositionBins = 4;
+	
+	
+	
+	/**Action control variables*/
+	static int moveForwardStepSize = 40;
+	static int moveBackwardsStepSize = 20;
+	
+	private static final int turnAngleStepSize = 90;
+	
+	
+	
+	/**Game control variables*/
+	static double enemyDistance = 0;
+	
+	static double energy = 0;
+	static double enemyEnergy = 0;
+	
+	static double bearingFromGun = 0;
+	static double enemyBearing = 0;
+	static int enemyHeading = 0;
+	static double absoluteBearing = 0;
+	
+	static double firePower;
+	
+	
+	
+	/**Stat variables*/
+	static int numberOfIterations = 10;
+	long lastScanTime = 0;
+	static int progress = 0;
+	static double eprogress = 0;
+	static int  winRate = 0;
+	static double qError = 0;
+	static int round = 0;
+	//PrintStream progressionFile = null;
+	static List<String> statData = new ArrayList<String>();
+
+	
+	
+	/**Program variables*/
+	public static HsLUT2 robotsLut = null;
+	
+	static int currentState[] = new int[numberOfStates];
+	static int previousState[] = new int[numberOfStates];
+	
+	static int currentStateAction[] = new int[numberOfStates+numberOfActions];
+	static int previousStateAction[] = new int[numberOfStates+numberOfActions];
+
+	static int currentAction = 0;
+
+	static int sarsaPrevAction = 0;
+	static int numberOfRewards = 0;
+	static double reward = 0;
+	static double averageRewardsReceived = 0;
+
+	static Random rand = new Random();
+	
+	
+	
+	public void run() {
+		
+		if(robotsLut == null) {
+			
+			int sizes[] = {
+					numberOfDistanceBins,
+					numberOfBearningBins,
+					numberOfBearningBins,
+					numberOfEnergyBins,
+					numberOfEnergyBins,
+					numberOfPositionBins,
+					numberOfPositionBins};
+			
+			robotsLut = new HsLUT2(numberOfStates, numberOfActions, sizes);
+			
+			
+		//	PrintStream t = new PrintStream(new RobocodeFileOutputStream(););
+			System.out.println("***loaded LUT***");
+		}
+
+		
+		if (offPolicy) {
+		
+			previousState = getState();
+			while (true)
+			{
+				if (getTime() - lastScanTime > 50)
+					turnGunRight(180);
+
+				
+				previousStateAction = getBestAction(previousState, epsilon);
+				//right now the currentAction = previousAction:
+				performAction(currentAction);
+
+				currentState = getState();
+
+				currentStateAction = getBestAction(currentState,0);
+
+				if (numberOfRewards != 0)
+					averageRewardsReceived = reward/(double) numberOfRewards;
+				reward = 0;
+				numberOfRewards = 0;
+
+				qError += robotsLut.updateLUT(previousStateAction, currentStateAction, averageRewardsReceived, alpha, gamma);
+				round++;
+				previousState = currentState ;
+
+			}
+		}
+
+			else
+		{
+		//Regardless of what action you took update the best action. 
+			// Get Current state
+			previousState = getState();
+			previousStateAction = getBestAction(previousState, epsilon);
+			sarsaPrevAction = currentAction;
+			// Loop forever
+			while (true)
+			{
+				if (getTime() - lastScanTime > 50)
+					turnGunRight(180);
+				// Perform the best action
+				
+				performAction(sarsaPrevAction);
+				// Get Current state
+				currentState = getState();
+
+				currentStateAction = getBestAction(currentState,epsilon);
+
+				if (numberOfRewards != 0)
+					averageRewardsReceived = reward/(double) numberOfRewards;
+				reward = 0;
+				numberOfRewards = 0;
+
+				qError += robotsLut.updateLUT(previousStateAction, currentStateAction, averageRewardsReceived, alpha, gamma);
+				previousState = currentState ;
+				sarsaPrevAction = currentAction;
+			}
+		}
+	}
+
+
+	private void performAction(int ActionNum) { 
+		
+		switch(ActionNum) {
+		case 0:
+			setAhead(moveForwardStepSize);
+			execute();
+			break;
+		case 1:
+			setBack(moveBackwardsStepSize);
+			execute();
+			break;
+		case 2:
+			setTurnLeft(turnAngleStepSize);
+			setAhead(moveForwardStepSize);
+			setAdjustGunForRobotTurn(true);
+			execute();
+			break;
+		case 3:
+			setTurnRight(turnAngleStepSize);
+			setAhead(moveForwardStepSize);
+			setAdjustGunForRobotTurn(true);
+			execute();
+			break;
+		case 4:
+			setTurnGunRight(bearingFromGun);
+			setTurnRight(enemyBearing);
+			setAdjustGunForRobotTurn(true);
+			waitFor(new GunTurnCompleteCondition(this));
+			firePower = (-0.003 * enemyDistance) + 3;
+			fire(firePower);
+			break;
+		case 5:
+			setTurnGunRight(bearingFromGun);
+			waitFor(new GunTurnCompleteCondition(this));
+			firePower = (-0.003 * enemyDistance) + 3;
+			fire(firePower);
+			break;
+		case 6:
+			firePower = (-0.003 * enemyDistance) + 3;
+			fire(firePower);
+			break;
+		default:
+			System.out.println("Error");
+			break;	
+		}
+	}
+
+	
+	private int[] getState() {
+		
+		int[] state = new int[numberOfStates];
+		
+		if ( enemyDistance < 200)
+			state[0] = 0; // Close
+		
+		else if ((enemyDistance) >= 200 && (enemyDistance < 500))
+			state[0] = 1; // Near
+		
+		else
+			state[0] = 2; // Far
+	
+		
+		if (enemyBearing > -45 && enemyBearing <= 45) {
+			state[1] = 0; //Ahead
+			state[2] = 0; //Ahead
+		}
+		else if (enemyBearing <= 135 && enemyBearing > 45) {
+			state[1] = 1; //Right
+			state[2] = 1; //Right
+		}
+		else if (enemyBearing < -135 && enemyBearing >= 135) {
+			state[1] = 2; //Behind
+			state[2] = 2; //Behind
+		}
+		else {
+			state[1] = 3; //Left
+			state[2] = 3; //Left
+		}
+		
+		
+		energy = getEnergy();
+		if ( energy < 20 )
+			state[3] = 0; //Danger
+	
+		else if ( energy < 50)
+			state[3] = 1; //Warning
+	
+		else
+			state[3] = 2; //Okay
+		
+		
+		if ( enemyEnergy < 20 )	
+			state[4] = 0; //Danger
+	
+		else if ( enemyEnergy < 50)
+			state[4] = 1; //Warning
+		
+		else		
+			state[4] = 2; //Okay
+
+		state[5] = (int) (getX() * numberOfPositionBins / getBattleFieldWidth() );
+		
+		state[6] = (int) (getY() * numberOfPositionBins / getBattleFieldHeight() );
+		return state;
+	}
+	
+	int[] getBestAction(int[] state, double ep) {
+		
+		int indBest = 0;
+		
+		int out[] = new int[numberOfStates + numberOfActions];
+		
+		for(int i = 0; i < state.length; i++){
+			out[i] = state[i];
+		}
+		for(int i = state.length; i <out.length; i++){
+			out[i] = 0;
+		}
+		
+		
+		if (Math.random() < ep) {
+			
+			indBest = rand.nextInt(numberOfActions);
+			out[indBest + state.length] = 1;
+		}
+		else {
+
+			double res = -100;
+			int ind = state.length;
+			for(int i = 0; i <numberOfActions; i++){
+				
+				out[state.length + i] = 1;
+				
+				double temp = robotsLut.outputFor(out);
+				
+				if(temp > res){
+					res = temp;
+					ind = state.length + i;
+				}
+				
+				out[state.length + i] = 0;
+			}
+			
+			out[ind] = 1;
+			indBest = ind - state.length;
+		}
+		
+		
+		currentAction = indBest;
+		
+		return out;
+	}
+	
+	void copyCurrentToPrev() {
+		for(int i =0; i < currentState.length; i++) {
+			previousState[i] = currentState[i];
+		}
+		for(int i =0; i < currentStateAction.length; i++) {
+			previousStateAction[i] = currentStateAction[i];
+		}
+	}
+	
+
+	public void onScannedRobot(ScannedRobotEvent e)	{
+		enemyHeading = (int) (e.getHeading() / turnAngleStepSize);
+		enemyDistance = e.getDistance();
+		enemyEnergy = e.getEnergy();
+		enemyBearing = e.getBearing();
+		absoluteBearing = getHeading() + e.getBearing();
+		bearingFromGun = normalRelativeAngleDegrees(absoluteBearing - getGunHeading());
+		lastScanTime = getTime();
+	}
+	
+	public void onBulletHit(BulletHitEvent e) {
+		numberOfRewards++;
+		reward += rewardForHitBullet;
+	}
+	
+	public void onBulletMissed(BulletMissedEvent e) {
+		numberOfRewards++;
+		reward += rewardForMissBullet;
+	}
+	
+	public void onHitWall(HitWallEvent e) {
+		numberOfRewards++;
+		reward += rewardForHitWall;
+	}
+	
+	public void onHitRobot(HitRobotEvent e) {
+		
+		numberOfRewards++;
+		if (e.isMyFault())
+			reward += rewardForHitRobot;
+		else
+			reward += -rewardForHitRobot;
+	}
+	
+	public void onHitByBullet(HitByBulletEvent e) {
+		numberOfRewards++;
+		reward += rewardForHitByBullet;
+	}
+	
+	public void onDeath(DeathEvent e) {
+		numberOfRewards++;
+		reward -= rewardForLoss;
+		progress--;
+		eprogress -= enemyEnergy;
+	}
+	
+	public void onWin(WinEvent event) {
+		numberOfRewards++;
+		reward += rewardForWin;
+		progress++;
+		eprogress += getEnergy();
+		winRate++;
+	}
+	
+	public void onRoundEnded(RoundEndedEvent e)	{
+		int roundNum = e.getRound();
+		
+		if(roundNum != 0 && roundNum % numberOfIterations == 0) {
+			
+		   // statData.add(roundNum + "," + progress + "," + winRate);
+			statData.add(roundNum + "," + qError/round + "," + qError/numberOfIterations + "," + eprogress);
+			winRate = 0;
+			qError = 0;
+			round = 0;
+		}
+		
+	}
+	
+	public void onBattleEnded(BattleEndedEvent event) {
+
+		PrintStream progressionFile = null;
+		try {
+			progressionFile = new PrintStream(new RobocodeFileOutputStream(getDataFile("hs" + new Integer(trialNumber).toString() +".csv")));
+		} catch (IOException e) {e.printStackTrace();}
+		
+		for(String s : statData){
+			progressionFile.println(s);
+		}
+		
+		PrintStream file = null;
+		try {
+			file = new PrintStream(new RobocodeFileOutputStream(getDataFile("hs" + new Integer(trialNumber).toString() +"LUT.csv")));
+		}
+		catch (IOException e){e.printStackTrace();}
+		
+		robotsLut.save(file);
+		
+		file.close();
+		progressionFile.close();
+		
+	}
+	
+}
